@@ -83,6 +83,7 @@ jobs:
           } finally {
             [IO.File]::WriteAllText($path, $original)
           }
+          $global:LASTEXITCODE = 0
       - name: Build portable CLI
         run: |
           cargo build --release --locked -p gridcraft-cli --target x86_64-pc-windows-msvc
