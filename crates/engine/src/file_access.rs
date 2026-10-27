@@ -275,7 +275,7 @@ mod tests {
 
     #[cfg(windows)]
     thread_local! {
-        static RESOLVE_FS_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        pub(super) static RESOLVE_FS_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }
 
     #[cfg(windows)]
