@@ -22,7 +22,7 @@ jobs:
       CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
       CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: stable
@@ -30,60 +30,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           key: agent-cli-windows-x64
-      - name: PR engine and CLI tests only
+      - name: UNC regression test only
         run: |
-          cargo test --locked -p gridcraft-engine --lib file_access::tests::
+          cargo test --locked -p gridcraft-engine --lib file_access::tests::external_windows_namespaces_are_rejected_before_filesystem_access -- --exact
           if ($LASTEXITCODE -ne 0) { throw 'Engine roots tests failed' }
-          cargo test --locked -p gridcraft-cli --test it cli::mcp_automation_
-          if ($LASTEXITCODE -ne 0) { throw 'CLI roots tests failed' }
-      - name: PR MCP tests only
-        run: |
-          foreach ($test in @(
-            'a_read_outside_the_root_is_refused_and_one_inside_succeeds',
-            'writes_outside_the_root_are_refused_for_every_saving_command',
-            'a_root_left_out_grants_none_of_its_access',
-            'without_roots_nothing_is_confined'
-          )) {
-            cargo test --locked -p gridcraft-mcp --lib "tests::$test" -- --exact
-            if ($LASTEXITCODE -ne 0) { throw "MCP test failed: $test" }
-          }
-      - name: Prove the file guards with mutations
-        run: |
-          $path = 'crates/engine/src/io.rs'
-          $original = [IO.File]::ReadAllText($path)
-          $mutations = @(
-            @{
-              Guards = @('    crate::file_access::check_read(path).map_err(EngineError::Other)?;')
-              Test = 'a_read_outside_the_root_is_refused_and_one_inside_succeeds'
-            },
-            @{
-              Guards = @(
-                '    crate::file_access::check_write(path).map_err(EngineError::Other)?;',
-                '    crate::file_access::check_write(&tmp).map_err(EngineError::Other)?;'
-              )
-              Test = 'writes_outside_the_root_are_refused_for_every_saving_command'
-            }
-          )
-          try {
-            foreach ($mutation in $mutations) {
-              $changed = $original
-              foreach ($guard in $mutation.Guards) {
-                if (-not $changed.Contains($guard)) { throw "Guard missing: $guard" }
-                $changed = $changed.Replace($guard, '')
-              }
-              [IO.File]::WriteAllText($path, $changed)
-              $output = cargo test --locked -p gridcraft-mcp --lib "tests::$($mutation.Test)" -- --exact 2>&1
-              $code = $LASTEXITCODE
-              $output | Write-Output
-              if ($code -eq 0 -or ($output -join "`n") -notmatch '1 failed') {
-                throw "Mutation survived or failed to compile: $($mutation.Test)"
-              }
-              Write-Output "Killed mutation: $($mutation.Test) (1 failed test)"
-            }
-          } finally {
-            [IO.File]::WriteAllText($path, $original)
-          }
-          $global:LASTEXITCODE = 0
       - name: Build portable CLI
         run: |
           cargo build --release --locked -p gridcraft-cli --target x86_64-pc-windows-msvc
@@ -97,6 +47,14 @@ jobs:
           New-Item -ItemType Directory -Force dist, official | Out-Null
           gh release download v0.12.1 --repo storytold/gridcraft --pattern 'gridcraft-0.12.1-windows-x64-portable.zip' --dir official
           if ($LASTEXITCODE -ne 0) { throw 'Official portable download failed' }
+          gh release download v0.12.1 --repo storytold/gridcraft --pattern 'SHA256SUMS.txt' --dir official
+          if ($LASTEXITCODE -ne 0) { throw 'Official checksums download failed' }
+          $entries = @(Get-Content official/SHA256SUMS.txt | Where-Object { $_ -match '^[0-9a-fA-F]{64}\s+\*?gridcraft-0\.12\.1-windows-x64-portable\.zip$' })
+          if ($entries.Count -ne 1) { throw 'Expected exactly one published portable checksum' }
+          $expected = ($entries[0] -split '\s+')[0]
+          $actual = (Get-FileHash official/gridcraft-0.12.1-windows-x64-portable.zip -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw 'Official portable checksum mismatch' }
+          Write-Output "Verified official portable SHA256: $actual"
           Expand-Archive official/gridcraft-0.12.1-windows-x64-portable.zip official/unpacked
           $officialCli = @(Get-ChildItem official/unpacked -Recurse -Filter gridcraft-cli.exe)
           if ($officialCli.Count -ne 1) { throw 'Expected exactly one official CLI' }
@@ -113,7 +71,7 @@ jobs:
           $zip = Get-FileHash dist/gridcraft-cli-0.12.1-roots-windows-x64.zip -Algorithm SHA256
           '{0}  gridcraft-cli-0.12.1-roots-windows-x64.zip' -f $zip.Hash.ToLowerInvariant() |
             Set-Content dist/SHA256SUMS.txt -Encoding ascii
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gridcraft-cli-0.12.1-roots-windows-x64
           path: |

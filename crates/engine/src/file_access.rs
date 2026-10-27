@@ -209,6 +209,8 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
     let mut missing: Vec<OsString> = vec![];
     let mut at = absolute.as_path();
     loop {
+        #[cfg(all(test, windows))]
+        tests::RESOLVE_FS_CALLS.with(|calls| calls.set(calls.get() + 1));
         match std::fs::canonicalize(at) {
             Ok(mut found) => {
                 found.extend(missing.iter().rev());
@@ -270,6 +272,34 @@ fn is_device_name(component: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    thread_local! {
+        static RESOLVE_FS_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn external_windows_namespaces_are_rejected_before_filesystem_access() {
+        let (base, roots) = folders("windows-namespaces");
+        for path in [
+            r"\\.\C:\Windows\win.ini",
+            r"\\127.0.0.1\c$\Windows\win.ini",
+            r"\\?\UNC\127.0.0.1\c$\Windows\win.ini",
+            r"//127.0.0.1/c$/Windows/win.ini",
+            r"\\.\UNC\127.0.0.1\c$\Windows\win.ini",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\Windows\win.ini",
+        ] {
+            for access in [Access::Read, Access::Write] {
+                RESOLVE_FS_CALLS.with(|calls| calls.set(0));
+                let result = roots.check(path, access);
+                assert_eq!(RESOLVE_FS_CALLS.with(|calls| calls.get()), 0, "filesystem touched: {path}");
+                let kind = if access == Access::Read { "read" } else { "write" };
+                assert!(result.unwrap_err().contains(&format!("outside the {kind} root")), "{path}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
 
     /// A fresh folder holding `in` (read root), `out` (write root) and `outside`.
     fn folders(name: &str) -> (PathBuf, Arc<AutomationRoots>) {
