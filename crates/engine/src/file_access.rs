@@ -307,6 +307,15 @@ mod tests {
             r"//127.0.0.1/c$/Windows/win.ini",
             r"\\.\UNC\127.0.0.1\c$\Windows\win.ini",
             r"\\?\GLOBALROOT\Device\HarddiskVolume1\Windows\win.ini",
+            r"\\127.0.0.1\\c$\Windows\win.ini",
+            r"//h//s/x",
+            r"\\h\\\s\x",
+            r"\/h\s\x",
+            r"\\\h\s\x",
+            r"/\h/s/x",
+            r"\\?\UNC\h\\s\x",
+            r"\??\UNC\h\s\x",
+            r"\\gc-probe-nohost.invalid\\share\x.csv",
         ] {
             for access in [Access::Read, Access::Write] {
                 RESOLVE_FS_CALLS.with(|calls| calls.set(0));
