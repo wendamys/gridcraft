@@ -130,8 +130,18 @@ impl AutomationRoots {
 fn external_windows_namespace(path: &str, root: &Path) -> bool {
     use std::path::Prefix;
 
-    if !cfg!(windows) || !matches!(Path::new(path).components().next(), Some(Component::Prefix(p)) if !matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))) {
+    if !cfg!(windows) {
         return false;
+    }
+    // Empty UNC components can hide the prefix from Rust's parser, then Windows collapses
+    // the separators when making the path absolute. Refuse these ambiguous namespaces too.
+    if path.starts_with(r"\??\") {
+        return true;
+    }
+    match Path::new(path).components().next() {
+        Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) => return false,
+        Some(Component::Prefix(_)) => {}
+        _ => return path.as_bytes().get(..2).is_some_and(|start| start.iter().all(|c| matches!(c, b'/' | b'\\'))),
     }
     let mut lexical = PathBuf::new();
     for component in plain(PathBuf::from(path.replace('/', "\\"))).components() {
