@@ -1,0 +1,121 @@
+name: Agent CLI Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['agent-roots-*']
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      RUST_BACKTRACE: 1
+      CARGO_BUILD_TARGET: x86_64-pc-windows-msvc
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS: '-C target-feature=+crt-static'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          key: agent-cli-windows-x64
+      - name: PR engine and CLI tests only
+        run: |
+          cargo test --locked -p gridcraft-engine --lib file_access::tests::
+          if ($LASTEXITCODE -ne 0) { throw 'Engine roots tests failed' }
+          cargo test --locked -p gridcraft-cli --test it cli::mcp_automation_
+          if ($LASTEXITCODE -ne 0) { throw 'CLI roots tests failed' }
+      - name: PR MCP tests only
+        run: |
+          foreach ($test in @(
+            'a_read_outside_the_root_is_refused_and_one_inside_succeeds',
+            'writes_outside_the_root_are_refused_for_every_saving_command',
+            'a_root_left_out_grants_none_of_its_access',
+            'without_roots_nothing_is_confined'
+          )) {
+            cargo test --locked -p gridcraft-mcp --lib "tests::$test" -- --exact
+            if ($LASTEXITCODE -ne 0) { throw "MCP test failed: $test" }
+          }
+      - name: Prove the file guards with mutations
+        run: |
+          $path = 'crates/engine/src/io.rs'
+          $original = [IO.File]::ReadAllText($path)
+          $mutations = @(
+            @{
+              Guards = @('    crate::file_access::check_read(path).map_err(EngineError::Other)?;')
+              Test = 'a_read_outside_the_root_is_refused_and_one_inside_succeeds'
+            },
+            @{
+              Guards = @(
+                '    crate::file_access::check_write(path).map_err(EngineError::Other)?;',
+                '    crate::file_access::check_write(&tmp).map_err(EngineError::Other)?;'
+              )
+              Test = 'writes_outside_the_root_are_refused_for_every_saving_command'
+            }
+          )
+          try {
+            foreach ($mutation in $mutations) {
+              $changed = $original
+              foreach ($guard in $mutation.Guards) {
+                if (-not $changed.Contains($guard)) { throw "Guard missing: $guard" }
+                $changed = $changed.Replace($guard, '')
+              }
+              [IO.File]::WriteAllText($path, $changed)
+              $output = cargo test --locked -p gridcraft-mcp --lib "tests::$($mutation.Test)" -- --exact 2>&1
+              $code = $LASTEXITCODE
+              $output | Write-Output
+              if ($code -eq 0 -or ($output -join "`n") -notmatch '1 failed') {
+                throw "Mutation survived or failed to compile: $($mutation.Test)"
+              }
+              Write-Output "Killed mutation: $($mutation.Test) (1 failed test)"
+            }
+          } finally {
+            [IO.File]::WriteAllText($path, $original)
+          }
+      - name: Build portable CLI
+        run: |
+          cargo build --release --locked -p gridcraft-cli --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
+          & target/x86_64-pc-windows-msvc/release/gridcraft-cli.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'CLI smoke test failed' }
+      - name: Package with the official 0.12.1 companion files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force dist, official | Out-Null
+          gh release download v0.12.1 --repo storytold/gridcraft --pattern 'gridcraft-0.12.1-windows-x64-portable.zip' --dir official
+          if ($LASTEXITCODE -ne 0) { throw 'Official portable download failed' }
+          Expand-Archive official/gridcraft-0.12.1-windows-x64-portable.zip official/unpacked
+          $officialCli = @(Get-ChildItem official/unpacked -Recurse -Filter gridcraft-cli.exe)
+          if ($officialCli.Count -ne 1) { throw 'Expected exactly one official CLI' }
+          $stage = Join-Path $pwd 'dist/gridcraft-cli-0.12.1-roots-windows-x64'
+          New-Item -ItemType Directory $stage | Out-Null
+          Copy-Item -LiteralPath $officialCli[0].Directory.FullName -Destination "$stage/companions" -Recurse
+          Move-Item -Path "$stage/companions/*" -Destination $stage
+          Remove-Item -LiteralPath "$stage/companions"
+          Copy-Item target/x86_64-pc-windows-msvc/release/gridcraft-cli.exe "$stage/gridcraft-cli.exe" -Force
+          Get-ChildItem $stage -File | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          } | Set-Content "$stage/SHA256SUMS.txt" -Encoding ascii
+          Compress-Archive -Path "$stage/*" -DestinationPath dist/gridcraft-cli-0.12.1-roots-windows-x64.zip
+          $zip = Get-FileHash dist/gridcraft-cli-0.12.1-roots-windows-x64.zip -Algorithm SHA256
+          '{0}  gridcraft-cli-0.12.1-roots-windows-x64.zip' -f $zip.Hash.ToLowerInvariant() |
+            Set-Content dist/SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gridcraft-cli-0.12.1-roots-windows-x64
+          path: |
+            dist/gridcraft-cli-0.12.1-roots-windows-x64.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
