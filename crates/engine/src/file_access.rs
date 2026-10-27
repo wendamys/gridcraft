@@ -147,7 +147,9 @@ fn external_windows_namespace(path: &str, root: &Path) -> bool {
     for component in plain(PathBuf::from(path.replace('/', "\\"))).components() {
         match component {
             Component::CurDir => {}
-            Component::ParentDir => { lexical.pop(); }
+            Component::ParentDir => {
+                lexical.pop();
+            }
             _ => lexical.push(component.as_os_str()),
         }
     }
