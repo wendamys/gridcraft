@@ -64,7 +64,9 @@ you give it:
   links are followed and the rest must be plain names, so `..` below a folder that doesn't exist is refused, as is
   a link that leads nowhere (writing through it would create its target). The result is compared with the root by
   whole folder names: `/work2/x` is not inside `/work`. On Windows case is ignored, UNC paths
-  (`\\server\share\...`) are resolved like drive-letter ones, and device names (`CON`, `NUL`, `COM1`...) are refused.
+  (`\\server\share\...`, including `\\?\UNC\...`) and device namespace paths (`\\.\...`) outside the root
+  by whole folder names are rejected before filesystem access. Namespace paths inside the root still have their
+  links checked. Device names (`CON`, `NUL`, `COM1`...) are refused.
 - A refused path is an ordinary tool error the agent can read and correct, for example
   `automation path rejected: outside the write root /work/project/out: /etc/x.xlsx` or
   `automation filesystem access is not granted: write authority is absent: /work/project/out/x.xlsx`.

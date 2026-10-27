@@ -115,7 +115,7 @@ impl AutomationRoots {
                 Access::Write => Err(format!("automation filesystem access is not granted: write authority is absent: {path}")),
             };
         };
-        if inside(&resolve(path)?, folder) {
+        if !external_windows_namespace(path, folder) && inside(&resolve(path)?, folder) {
             return Ok(());
         }
         let root = shown.display();
@@ -124,6 +124,24 @@ impl AutomationRoots {
             Access::Write => Err(format!("automation path rejected: outside the write root {root}: {path}")),
         }
     }
+}
+
+/// Refuse external Windows namespaces by name before resolving can contact an SMB host or device.
+fn external_windows_namespace(path: &str, root: &Path) -> bool {
+    use std::path::Prefix;
+
+    if !cfg!(windows) || !matches!(Path::new(path).components().next(), Some(Component::Prefix(p)) if !matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))) {
+        return false;
+    }
+    let mut lexical = PathBuf::new();
+    for component in plain(PathBuf::from(path.replace('/', "\\"))).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => { lexical.pop(); }
+            _ => lexical.push(component.as_os_str()),
+        }
+    }
+    !inside(&lexical, &plain(root.to_path_buf()))
 }
 
 /// Where the roots are in force on a thread ([`confine`], [`unconfined`]).
@@ -299,6 +317,30 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_namespace_precheck_compares_normalized_whole_components() {
+        let root = Path::new(r"\\?\UNC\server\share\work");
+        for path in [
+            r"\\server\share\work\book.xlsx",
+            r"\\?\UNC\SERVER\SHARE\WORK\book.xlsx",
+            r"//server/share/work/book.xlsx",
+            r"\\?\UNC\server\share\work\sub\..\book.xlsx",
+        ] {
+            assert!(!external_windows_namespace(path, root), "inside: {path}");
+        }
+        for path in [
+            r"\\server\share\work2\book.xlsx",
+            r"\\server\other\work\book.xlsx",
+            r"\\other\share\work\book.xlsx",
+            r"\\?\UNC\server\share\work\..\outside\book.xlsx",
+        ] {
+            assert!(external_windows_namespace(path, root), "outside: {path}");
+        }
+        assert!(!external_windows_namespace(r"C:\local\book.xlsx", root));
+        assert!(!external_windows_namespace(r"\\?\C:\local\book.xlsx", root));
     }
 
     /// A fresh folder holding `in` (read root), `out` (write root) and `outside`.

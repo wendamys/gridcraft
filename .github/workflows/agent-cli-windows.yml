@@ -34,6 +34,33 @@ jobs:
         run: |
           cargo test --locked -p gridcraft-engine --lib file_access::tests::external_windows_namespaces_are_rejected_before_filesystem_access -- --exact
           if ($LASTEXITCODE -ne 0) { throw 'Engine roots tests failed' }
+          cargo test --locked -p gridcraft-engine --lib file_access::tests::windows_namespace_precheck_compares_normalized_whole_components -- --exact
+          if ($LASTEXITCODE -ne 0) { throw 'Namespace comparison test failed' }
+      - name: Prove UNC denial precedes filesystem access
+        run: |
+          $path = 'crates/engine/src/file_access.rs'
+          $original = [IO.File]::ReadAllText($path)
+          $guard = '        if !external_windows_namespace(path, folder) && inside(&resolve(path)?, folder) {'
+          if (-not $original.Contains($guard)) { throw 'UNC precheck missing' }
+          $mutations = @(
+            '        if inside(&resolve(path)?, folder) {',
+            '        if inside(&resolve(path)?, folder) && !external_windows_namespace(path, folder) {'
+          )
+          try {
+            foreach ($replacement in $mutations) {
+              [IO.File]::WriteAllText($path, $original.Replace($guard, $replacement))
+              $output = cargo test --locked -p gridcraft-engine --lib file_access::tests::external_windows_namespaces_are_rejected_before_filesystem_access -- --exact 2>&1
+              $code = $LASTEXITCODE
+              $output | Write-Output
+              if ($code -eq 0 -or ($output -join "`n") -notmatch 'test result: FAILED\. 0 passed; 1 failed') {
+                throw "Mutation survived or failed to run: $replacement"
+              }
+              Write-Output "Killed mutation (1 failed test): $replacement"
+            }
+          } finally {
+            [IO.File]::WriteAllText($path, $original)
+          }
+          $global:LASTEXITCODE = 0
       - name: Build portable CLI
         run: |
           cargo build --release --locked -p gridcraft-cli --target x86_64-pc-windows-msvc
